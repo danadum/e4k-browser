@@ -25,8 +25,7 @@ If it doesn't works and open GGE servers instead, try to refresh the webpage a f
 This could be considered by ggs as using a bot, so use it at your own risks!
 
 Also some functionnalities of the game are currently not supported, and are not planned to be for now. Those includes:
-- Account creation
-- most ingame special offers, including bestsellers
-- webshop
+- cash ingame special offers
+- a few bugs in beginner tutorial
 
 Feel free to report any other issues unrelated to the above functionnalities.

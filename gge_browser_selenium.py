@@ -12,6 +12,8 @@ import threading
 import _thread
 import sys
 import traceback
+import time
+import requests
 
 def open_browser(game_url, on_ready):
     options = webdriver.ChromeOptions()
@@ -25,6 +27,7 @@ def open_browser(game_url, on_ready):
     driver.get(game_url)
     iframe = start_game(driver, on_ready)
     threading.Thread(target=watch_reload, args=(driver, iframe, on_ready), daemon=True).start()
+    threading.Thread(target=watch_webshop, args=(driver,), daemon=True).start()
 
 def start_game(webdriver, on_ready):
     webdriver.set_network_conditions(offline=True, latency=1000, throughput=0)
@@ -40,6 +43,47 @@ def start_game(webdriver, on_ready):
     webdriver.switch_to.default_content()
     webdriver.delete_network_conditions()
     return iframe
+
+def watch_webshop(webdriver):
+    wait = WebDriverWait(webdriver, float('inf'))
+    while True:
+        try:
+            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'iframe#dialog[src^="https://canvas.goodgamestudios.com"]')))
+            iframe = webdriver.find_element(By.CSS_SELECTOR, 'iframe#dialog[src^="https://canvas.goodgamestudios.com"]')
+            url, args = iframe.get_attribute('src').split('?', 1)
+            args = {k: v for k, v in (arg.split('=', 1) for arg in args.split('&'))}
+            url = f"{url}?locale={args['locale']}&zoneId={args['zoneId']}&criteria={args['criteria']}&lemonstand.customization.url={args['lemonstand.customization.url']}"
+            
+            gameframe = webdriver.find_element(By.ID, 'game')
+            webdriver.switch_to.frame(gameframe)
+            network_id, server_id, player_id = webdriver.execute_script("return [window.networkId, window.serverId, window.playerId]")
+            webdriver.switch_to.default_content()
+
+            r = requests.get(f"https://accounts.public.ggs-ep.com/players/16-{network_id}-{server_id}-{player_id}/gnip-phrase", headers={"Authorization": f"Bearer {args['token']}"})
+            accound_id = r.json()['gnipPhrase']
+            r = requests.post("https://mbs-accounts.goodgamestudios.com/login/lemonstand", allow_redirects=False, headers={"content-type": "application/x-www-form-urlencoded", "origin": "https://e4k.goodgamestudios.com"}, data={"gnipPhrase": accound_id, "errorUrl": "https://e4k.goodgamestudios.com"})
+            cookies = r.headers['set-cookie'].split(', ')
+            
+            webdriver.switch_to.frame(iframe)
+            for cookie in cookies:
+                data, args = cookie.split('; ', 1)
+                name, value = data.split('=', 1)
+                args = {part[0]: part[1] if len(part) > 1 else None for part in (arg.split('=', 1) for arg in args.split('; '))}
+                webdriver.add_cookie({'name': name, 'value': value, "expiry": int(time.time()) + int(args['Max-Age']), "domain": args["Domain"], "path": args['Path'], "secure": 'Secure' in args, "sameSite": "None"})
+            webdriver.switch_to.default_content()
+
+            webdriver.execute_script(f"arguments[0].src = '{url}'", iframe)
+            wait.until(EC.staleness_of(iframe))
+        except Exception as e:
+            if isinstance(e, WebDriverException) and "target frame detached" in str(e):
+                pass
+            elif isinstance(e, WebDriverException) and "unknown error: cannot determine loading status" in str(e):
+                pass
+            elif isinstance(e, WebDriverException) and "unknown error: bad inspector message" in str(e):
+                pass
+            else:
+                traceback.print_exc()
+                break
 
 def watch_reload(webdriver, iframe, on_ready):
     while True:
@@ -101,16 +145,16 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                     url = "https://raw.githubusercontent.com/danadum/ggs-assets/main/e4k/network.xml";
                 }
                 else if (url.startsWith('https://player-kv.public.ggs-ep.com/api/players')) {
-                    url = url.replace(/players\/12-[0-9]+-/, `/players/16-${window.networkId}-`);
+                    url = url.replace(/\/players\/12-[0-9]+-[0-9]+-/, `/players/16-${window.networkId}-${window.serverId}-`);
                 }
                 else if (url.startsWith('https://accounts.public.ggs-ep.com/players')) {
-                    url = url.replace(/players\/12-[0-9]+-/, `/players/16-${window.networkId}-`);
+                    url = "https://sheltered-everglades-24913.fly.dev/" + url.replace(/\/players\/12-[0-9]+-[0-9]+-/, `/players/16-${window.networkId}-${window.serverId}-`);
                 }
                 else if (url.startsWith('https://gdpr-delete.public.ggs-ep.com/players')) {
-                    url = url.replace(/players\/12-[0-9]+-/, `/players/16-${window.networkId}-`);
+                    url = url.replace(/\/players\/12-[0-9]+-[0-9]+-/, `/players/16-${window.networkId}-${window.serverId}-`);
                 }
                 else if (url.startsWith('https://reward-hub.public.ggs-ep.com/api/rewards')) {
-                    url = url.replace('/rewards/12', '/rewards/16');
+                    url = url.replace(/\/rewards\/12-[0-9]+-[0-9]+-/, `/rewards/16-${window.networkId}-${window.serverId}-`);
                 }
 
                 super.open(method, url, async, user, password);
@@ -205,14 +249,35 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                             else if (data[2] === 'core_reg') {
                                 data[2] = 'lre';
                                 if (data[4] === '10005') data[4] = '0';
-                                if (data[4] === '10007') {
-                                    data[4] = '3';
-                                    data.splice(5, 1);
-                                }
+                                if (data[4] === '10007') data[4] = '3';
+                                if (data[4] === '10018') data[4] = '24';
+                                if (data[4] === '10019') data[4] = '23';
+                                if (data[4] === '10021') data[4] = '22';
+                                if (data[4] === '10022') data[4] = '28';
+                                if (data[4] === '10023') data[4] = '70';
                             }
                             else if (data[2] === 'core_pol' && data[4] === '10005') {
                                 let payload = JSON.parse(data[5]);
-                                payload = payload.filter(offer => !offer.OD.some(dialog => dialog.visualComponents.some(component => component.name === 'offersHub')));
+                                for (let offer of payload) {
+                                    for (let dialog of offer.OD) {
+                                        for (let component of dialog.visualComponents ?? []) {
+                                            if (component.name === 'offersHub') {
+                                                dialog.visualComponents = dialog.visualComponents.filter(c => c !== component);
+                                                if (dialog.visualComponents.some(c => c.name === 'offerDialog' && c.params.DN === 'BestsellerShopDialog' && c.params.AS === false)) {
+                                                    dialog.visualComponents.push({"name": "interfaceButton", "params": {"BT": "Btn_BestsellerShop", "PT": 6, "TID": "dialog_privateBestsellerShop_title"}});
+                                                }
+                                                else if (dialog.visualComponents.some(c => c.name === 'offerDialog' && c.params.DN === 'BestsellerShopDialog' && c.params.AS === true)) {}
+                                                else if (offer.OD.length > 1) {
+                                                    dialog.visualComponents.push({"name": "failedDialog","params": {"AS": true,"OS": [443,423],"DN": "CastlePOWhaleChestFinishExternal"}},{"name": "finishDialog","params": {"AS": true,"DN": "CastlePOStandardOKExternal"}},{"name": "questDialog","params": {"AS": false,"DN": "CastlePOMultiChest"}},{"name": "offerDialog","params": {"AS": false,"DN": "CastlePOMultiChest","DC": {"BAB": 1,"OT": 1,"CID": "dialog_privateOffer_whaleChest_descripton1"}}},{"name": "interfaceButton","params": {"BT": "Btn_POMultiChest","OS": true,"PT": 6,"TID": "dialog_primeday_specialoffer_title"}});
+                                                }
+                                                else if (offer.QD?.conditions?.some(condition => condition.name === 'cashOfferPackage')) {}
+                                                else {
+                                                    dialog.visualComponents.push({"name": "finishDialog","params": {"AS": true,"OS": [423,443],"DN": "CastlePaymentRewardSpecialOfferFinish"}},{"name": "questDialog","params": {"AS": false,"DN": "CastlePrivatePrimeDayDynamicDialog","DC": {"HL": [],"LEID": {"TXT": {"TXT1": {"A": [250],"ID": "dialog_specialOffer_bonus_1"},"TXT0": {"A": [2000000],"ID": "dialog_specialOffer_bonus_0"}},"ID": -1,"ICON": "icon_hc_rubi_rm"},"REID": {"TXT": {"TXT0": {"A": [],"ID": "dialog_specialOffer_limitedTime"}},"ID": -1},"ID": "fullScreenOfferDC","RM": {"A": [19000],"T": 0},"TSID": 42,"TID": "dialog_specialOffer_title_1","SID": 1}}},{"name": "interfaceButton","params": {"BT": "Btn_POMultiChest","OS": true,"PT": 6,"TID": "dialog_primeday_specialoffer_title"}});
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 data[5] = JSON.stringify(payload);
                             }
                             else if (data[2] === 'core_gpi' && data[4] === '0') {
@@ -235,6 +300,15 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                                     this.send(`%%xt%%${this.serverKey}%%acl%%1%%{}%%`);
                                     this.send(`%%xt%%${this.serverKey}%%ain%%1%%{"AID": ${payload.gal.AID}}%%`);
                                 }
+                                window.playerId = payload.gpi.PID;
+                            }
+                            else if (data[2] === 'ams' && data[4] === '0') {
+                                let payload = JSON.parse(data[5]);
+                                if (payload.MIDS) {
+                                    payload.MID = payload.MIDS[0];
+                                    delete payload.MIDS;
+                                }
+                                data[5] = JSON.stringify(payload);
                             }
 
                             data = data.join('%%');
@@ -249,6 +323,7 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
             send(data) {
                 if (data.includes("action='login'")) {
                     this.serverKey = new DOMParser().parseFromString(data, "application/xml").documentElement.firstChild.firstChild.getAttribute('z');
+                    window.serverId = +(this.serverKey.split('_')?.[1] ?? 1);
                 }
                 else if (data.includes('%%vck%%1%%')) {
                     localSocket.send(`send#${data}`);
@@ -259,17 +334,42 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                 else if (data.includes('%%lli%%1%%')) {
                     data = data.split('%%');
                     let payload = JSON.parse(data[5]);
-                    data = `%%xt%%${data[2]}%%core_lga%%1%%{"NM": "${payload.NOM}", "PW": "${payload.PW}", "L": "fr", "AID": "1674256959939529708", "DID": 5, "PLFID": "3", "ADID": "null", "AFUID": "appsFlyerUID", "IDFV": "null"}%%`;
+                    payload = {NM: payload.NOM, PW: payload.PW, L: payload.LANG, AID: payload.AID, DID: payload.DID, PLFID: payload.PLFID, ADID: "null", AFUID: "appsFlyerUID", IDFV: null};
+                    data[5] = JSON.stringify(payload);
+                    data[3] = 'core_lga';
+                    data = data.join('%%');
                 }
                 else if (data.includes('%%lre%%1%%')) {
                     data = data.split('%%');
                     let payload = JSON.parse(data[5]);
-                    data = `%%xt%%${data[2]}%%core_reg%%1%%{"NM": "${payload.PN}", "PW": "${payload.PW}", "L": "fr", "AID": "1674256959939529708", "DID": 5, "PLFID": "3", "ADID": "null", "AFUID": "appsFlyerUID", "IDFV": "null"}%%`;
+                    payload = {PN: payload.PN, PW: payload.PW, MAIL: `${payload.PN}@mail.com`, LANG: payload.LANG, AID: payload.AID, DID: payload.DID, PLFID: payload.PLFID, ADID: "null", AFUID: "appsFlyerUID", IDFV: null, REF: ""};
+                    data[5] = JSON.stringify(payload);
+                    data[3] = 'core_reg';
+                    data = data.join('%%');
+                    localSocket.send(`send#${data}`);
+                    super.send(data);
+
+                    data = data.split('%%');
+                    payload = {NM: payload.PN, PW: payload.PW, L: payload.LANG, AID: payload.AID, DID: payload.DID, PLFID: payload.PLFID, ADID: payload.ADID, AFUID: payload.AFUID, IDFV: payload.IDFV};
+                    data[5] = JSON.stringify(payload);
+                    data[3] = 'core_lga';
+                    data = data.join('%%');
+                    this.send(data);
+                    return;
                 }               
                 else if (data.includes('%%sbp%%1%%')) {
                     data = data.split('%%');
                     let payload = JSON.parse(data[5]);
                     if (payload.TID === 116) payload.TID = 92;
+                    else if (payload.TID === 80) payload.TID = 107;
+                    data[5] = JSON.stringify(payload);
+                    data = data.join('%%');
+                }
+                else if (data.includes('%%ams%%1%%')) {
+                    data = data.split('%%');
+                    let payload = JSON.parse(data[5]);
+                    payload.MIDS = [payload.MID];
+                    delete payload.MID;
                     data[5] = JSON.stringify(payload);
                     data = data.join('%%');
                 }
