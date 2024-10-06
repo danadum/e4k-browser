@@ -176,6 +176,11 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                         request.send();
                         let quests = JSON.parse(request.responseText, (key, value, data) => typeof value === 'number' ? data.source : value);
                         response.quests = quests.quest;
+                        request = new originalXMLHttpRequest();
+                        request.open('GET', 'https://raw.githubusercontent.com/vanBrusselTechnologies/E4K-data/main/data/units.json', false);
+                        request.send();
+                        let units = JSON.parse(request.responseText, (key, value, data) => typeof value === 'number' ? key === 'wodID' ? value : data.source : value);
+                        response.units = units.unit;
                         this.response = this.responseText = JSON.stringify(response);
                     }
                     else if (type === 'load' && this.readyState === 4 && /config\/languages\/[0-9]+\/[a-z_]+\.json/.test(this.url)) {
