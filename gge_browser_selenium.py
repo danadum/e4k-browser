@@ -137,6 +137,11 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
     server_version = get_server_version()
 
     on_ready = """
+        let request = new XMLHttpRequest();
+        request.open('GET', 'https://raw.githubusercontent.com/vanBrusselTechnologies/E4K-data/main/data/buildings.json', false);
+        request.send();
+        window.buidings = JSON.parse(request.responseText).building;
+
         const originalXMLHttpRequest = window.XMLHttpRequest;
         window.XMLHttpRequest = class extends originalXMLHttpRequest {
             open(method, url, async, user, password) {
@@ -301,6 +306,14 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                                     this.send(`%%xt%%${this.serverKey}%%ain%%1%%{"AID": ${payload.gal.AID}}%%`);
                                 }
                                 window.playerId = payload.gpi.PID;
+                            }
+                            else if (data[2] === 'jaa' && data[4] === '0') {
+                                let payload = JSON.parse(data[5]);
+                                for (let building of payload.gca.BD) {
+                                    let e4kBuilding = window.buidings.find(b => b.wodID === building[0]);
+                                    if (e4kBuilding && e4kBuilding.crossplayID && e4kBuilding.crossplayID !== building[0]) building[0] = e4kBuilding.crossplayID;
+                                }
+                                data[5] = JSON.stringify(payload);
                             }
                             else if (data[2] === 'ams' && data[4] === '0') {
                                 let payload = JSON.parse(data[5]);
