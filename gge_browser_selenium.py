@@ -20,6 +20,7 @@ def open_browser(game_url, on_ready):
     options.add_argument('--no-sandbox')
     options.add_argument("--start-maximized")
     options.add_argument("--allow-running-insecure-content")
+    options.add_argument("--user-data-dir=./user-data")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("detach", True)
     driver = webdriver.Chrome(options=options)
@@ -137,10 +138,14 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
     server_version = get_server_version()
 
     on_ready = """
-        let request = new XMLHttpRequest();
-        request.open('GET', 'https://raw.githubusercontent.com/vanBrusselTechnologies/E4K-data/main/data/buildings.json', false);
-        request.send();
-        window.buidings = JSON.parse(request.responseText).building;
+        function getE4KData(file) {
+            let request = new XMLHttpRequest();
+            request.open('GET', `https://raw.githubusercontent.com/vanBrusselTechnologies/E4K-data/main/data/${file}.json`, false);
+            request.send();
+            return JSON.parse(request.responseText, (key, value, data) => typeof value === 'number' ? key === 'wodID' ? value : data.source : typeof value === 'string' ? value.replaceAll('&amp;', '&') : value);
+        }
+
+        window.buidings = getE4KData('buildings').building;
 
         const originalXMLHttpRequest = window.XMLHttpRequest;
         window.XMLHttpRequest = class extends originalXMLHttpRequest {
@@ -171,16 +176,27 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                         let response = JSON.parse(this.response ?? this.responseText);
                         Object.defineProperty(this, 'response', {writable: true});
                         Object.defineProperty(this, 'responseText', {writable: true});
-                        let request = new originalXMLHttpRequest();
-                        request.open('GET', 'https://raw.githubusercontent.com/vanBrusselTechnologies/E4K-data/main/data/quests.json', false);
-                        request.send();
-                        let quests = JSON.parse(request.responseText, (key, value, data) => typeof value === 'number' ? data.source : value);
-                        response.quests = quests.quest;
-                        request = new originalXMLHttpRequest();
-                        request.open('GET', 'https://raw.githubusercontent.com/vanBrusselTechnologies/E4K-data/main/data/units.json', false);
-                        request.send();
-                        let units = JSON.parse(request.responseText, (key, value, data) => typeof value === 'number' ? key === 'wodID' ? value : data.source : value);
-                        response.units = units.unit;
+
+                        response.quests = getE4KData('quests').quest;
+                        response.achievements = getE4KData('achievements').achievement;
+                        response.crestsymbols = getE4KData('crestsymbols').crestsymbol;
+
+                        let data = getE4KData('units').unit;
+                        response.units = response.units.map(unit => {
+                            let e4kUnit = data.find(u => +u.crossplayID === unit.wodID);
+                            if (e4kUnit) {
+                                e4kUnit.type = unit.type;
+                                return e4kUnit;
+                            }
+                            return unit;
+                        });
+
+                        data = getE4KData('equipment_effects').equipment_effect;
+                        response.equipment_effects = response.equipment_effects.map(effect => data.find(e => e.crossplayID === effect.equipmentEffectID) ?? effect);
+                        data = getE4KData('equipments').equipment;
+                        response.equipments = response.equipments.map(equipment => data.find(e => e.crossplayID === equipment.equipmentID) ?? equipment);
+                        response.effects.push(...getE4KData('effects').effect);
+
                         this.response = this.responseText = JSON.stringify(response);
                     }
                     else if (type === 'load' && this.readyState === 4 && /config\/languages\/[0-9]+\/[a-z_]+\.json/.test(this.url)) {
@@ -194,6 +210,16 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                         let e4kLang = JSON.parse(request.responseText);
                         response = {...response, ...e4kLang};
                         this.response = this.responseText = JSON.stringify(response);
+                    }
+                    else if (type === 'readystatechange' &&  this.readyState === 4 && /Crest\/CastleCrestSymbols\/CastleCrestSymbols--[0-9]*.js$/.test(this.url)) {
+                        let response = this.response ?? this.responseText;
+                            Object.defineProperty(this, 'response', {writable: true});
+                        Object.defineProperty(this, 'responseText', {writable: true});
+                        for (let i = 99; i > 38; i--) {
+                            response = response.replaceAll(`extCrestSymbol_${i}`, `extCrestSymbol_${i + 1}`);
+                        }
+                        this.response = this.responseText = response;
+                        window.crests = this.response;
                     }
                     listener();
                 }, options);
@@ -238,6 +264,7 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                         this.original_onmessage = fn;
                         return this.addEventListener('message', async (event) => {
                             let data = await event.data.text();
+                            data = data.replaceAll(/&#(\d+);/g, "&$1;");
                             data = data.split('%%');
 
                             if (data[2] === 'vpn') {
@@ -265,6 +292,13 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                                 if (data[4] === '10021') data[4] = '22';
                                 if (data[4] === '10022') data[4] = '28';
                                 if (data[4] === '10023') data[4] = '70';
+                            }
+                            else if (data[2] === 'core_avl' && data[4] === '10005') {
+                                let payload = JSON.parse(data[5]);
+                                payload = {LT: payload.P};
+                                data[5] = JSON.stringify(payload);
+                                data[4] = '0';
+                                data[2] = 'slt';
                             }
                             else if (data[2] === 'core_pol' && data[4] === '10005') {
                                 let payload = JSON.parse(data[5]);
@@ -317,6 +351,8 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                                 for (let building of payload.gca.BD) {
                                     let e4kBuilding = window.buidings.find(b => b.wodID === building[0]);
                                     if (e4kBuilding && e4kBuilding.crossplayID && e4kBuilding.crossplayID !== building[0]) building[0] = e4kBuilding.crossplayID;
+                                    if (e4kBuilding && Object.keys(e4kBuilding).some(key => key.endsWith('production'))) building[9] = ~~(building[9] * 100);
+                                    else building[9] = -1;
                                 }
                                 data[5] = JSON.stringify(payload);
                             }
@@ -326,6 +362,17 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                                     payload.MID = payload.MIDS[0];
                                     delete payload.MIDS;
                                 }
+                                data[5] = JSON.stringify(payload);
+                            }
+                            else if (data[2] === 'gas' && data[4] === '0') {
+                                let payload = JSON.parse(data[5]);
+                                payload.S = payload.S.map(s => {
+                                    let army = JSON.parse(s.A);
+                                    army = [army[1][0], army[0][0], army[2][0], army[1][1], army[0][1], army[2][1]]
+                                    army = army.map(x => x?.filter((y, i) => i %% 3 !== 0));
+                                    s.A = JSON.stringify(army);
+                                    return s;
+                                });
                                 data[5] = JSON.stringify(payload);
                             }
 
@@ -339,6 +386,8 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
             }
 
             send(data) {
+                data = data.replaceAll(/&(\d+);/g, "&#$1;");
+
                 if (data.includes("action='login'")) {
                     this.serverKey = new DOMParser().parseFromString(data, "application/xml").documentElement.firstChild.firstChild.getAttribute('z');
                     window.serverId = +(this.serverKey.split('_')?.[1] ?? 1);
@@ -349,13 +398,37 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                     this.dispatchEvent(new MessageEvent('message', {data: new Blob([data])}));
                     return;
                 }
+                else if (data.includes('%%pin%%1%%')) {
+                    data = data.split('%%');
+                    data[3] = 'pinpon';
+                    data[5] = JSON.stringify({});
+                    data = data.join('%%');
+                }
                 else if (data.includes('%%lli%%1%%')) {
                     data = data.split('%%');
                     let payload = JSON.parse(data[5]);
-                    payload = {NM: payload.NOM, PW: payload.PW, L: payload.LANG, AID: payload.AID, DID: payload.DID, PLFID: payload.PLFID, ADID: "null", AFUID: "appsFlyerUID", IDFV: null};
-                    data[5] = JSON.stringify(payload);
-                    data[3] = 'core_lga';
-                    data = data.join('%%');
+                    if (payload.LT) {
+                        payload = {NM: payload.NOM, PW: payload.LT, L: payload.LANG, AID: payload.AID, DID: payload.DID, PLFID: payload.PLFID, ADID: "null", AFUID: "appsFlyerUID", IDFV: null};
+                        data[5] = JSON.stringify(payload);
+                        data[3] = 'core_lga';
+                        data = data.join('%%');
+                    }
+                    else {
+                        payload = {NM: payload.NOM, PW: payload.PW, L: payload.LANG, AID: payload.AID, DID: payload.DID, PLFID: payload.PLFID, ADID: "null", AFUID: "appsFlyerUID", IDFV: null};
+                        data[5] = JSON.stringify(payload);
+                        data[3] = 'core_lga';
+                        data = data.join('%%');
+                        localSocket.send(`send#${data}`);
+                        super.send(data);
+
+                        data = data.split('%%');
+                        payload = {LN: payload.NM, P: payload.PW};
+                        data[5] = JSON.stringify(payload);
+                        data[3] = 'core_avl';
+                        data = data.join('%%');
+                        this.send(data);
+                        return;
+                    }
                 }
                 else if (data.includes('%%lre%%1%%')) {
                     data = data.split('%%');
@@ -371,6 +444,13 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                     payload = {NM: payload.PN, PW: payload.PW, L: payload.LANG, AID: payload.AID, DID: payload.DID, PLFID: payload.PLFID, ADID: payload.ADID, AFUID: payload.AFUID, IDFV: payload.IDFV};
                     data[5] = JSON.stringify(payload);
                     data[3] = 'core_lga';
+                    data = data.join('%%');
+                    this.send(data);
+
+                    data = data.split('%%');
+                    payload = {LN: payload.NM, P: payload.PW};
+                    data[5] = JSON.stringify(payload);
+                    data[3] = 'core_avl';
                     data = data.join('%%');
                     this.send(data);
                     return;
@@ -391,6 +471,17 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                     data[5] = JSON.stringify(payload);
                     data = data.join('%%');
                 }
+                else if (data.includes('%%sas%%1%%')) {
+                    data = data.split('%%');
+                    let payload = JSON.parse(data[5]);
+                    let army = JSON.parse(payload.A);
+                    army = army.map(x => x.flatMap((y, i) => i %% 2 === 0 ? [~~(i / 2), y] : [y]));
+                    army = [[army[1], army[4]], [army[0], army[3]], [army[2], army[5]]]
+                    payload.A = JSON.stringify(army);
+                    data[5] = JSON.stringify(payload);
+                    data = data.join('%%');
+                }
+
                 localSocket.send(`send#${data}`);
                 super.send(data);
             }
