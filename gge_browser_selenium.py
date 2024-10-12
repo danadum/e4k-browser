@@ -1,3 +1,4 @@
+import urllib.parse
 from websocket_server import WebsocketServer
 
 from selenium import webdriver
@@ -15,6 +16,7 @@ import traceback
 import time
 import requests
 import os
+import urllib
 
 def open_browser(game_url, on_ready):
     options = webdriver.ChromeOptions()
@@ -54,6 +56,11 @@ def watch_webshop(webdriver):
             iframe = webdriver.find_element(By.CSS_SELECTOR, 'iframe#dialog[src^="https://canvas.goodgamestudios.com"]')
             url, args = iframe.get_attribute('src').split('?', 1)
             args = {k: v for k, v in (arg.split('=', 1) for arg in args.split('&'))}
+            r = requests.get(urllib.parse.unquote(args['lemonstand.customization.url'].replace('em.json', 'mbs.json')))
+            customization = r.json()
+            customization['categories']['vouchers']['enabled'] = True
+            customization['platformContext']['storeIntegrationType'] = "embedded"
+            args['lemonstand.customization.url'] = f"data:text/json;charset=utf-8,{urllib.parse.quote(json.dumps(customization))}"
             url = f"{url}?locale={args['locale']}&zoneId={args['zoneId']}&criteria={args['criteria']}&lemonstand.customization.url={args['lemonstand.customization.url']}"
             
             gameframe = webdriver.find_element(By.ID, 'game')
@@ -143,7 +150,7 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
             let request = new XMLHttpRequest();
             request.open('GET', `https://raw.githubusercontent.com/vanBrusselTechnologies/E4K-data/main/data/${file}.json`, false);
             request.send();
-            return JSON.parse(request.responseText, (key, value, data) => typeof value === 'number' ? key === 'wodID' ? value : data.source : typeof value === 'string' ? value.replaceAll('&amp;', '&') : value);
+            return JSON.parse(request.responseText, (key, value, data) => typeof value === 'number' && key !== 'wodID' && key !== 'minLevel' ? data.source : typeof value === 'string' ? value.replaceAll('&amp;', '&') : value);
         }
 
         window.buidings = getE4KData('buildings').building;
@@ -181,22 +188,15 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                         response.quests = getE4KData('quests').quest;
                         response.achievements = getE4KData('achievements').achievement;
                         response.crestsymbols = getE4KData('crestsymbols').crestsymbol;
+                        response.subscriptionsBuffs = getE4KData('subscriptionsBuffs').subscriptionsBuff;
+                        response.effects = getE4KData('effects').effect;
 
                         let data = getE4KData('units').unit;
-                        response.units = response.units.map(unit => {
-                            let e4kUnit = data.find(u => +u.crossplayID === unit.wodID);
-                            if (e4kUnit) {
-                                e4kUnit.type = unit.type;
-                                return e4kUnit;
-                            }
-                            return unit;
-                        });
-
+                        response.units = response.units.map(unit => ({...data.find(u => +u.crossplayID === unit.wodID) ?? unit, type: unit.type}));
                         data = getE4KData('equipment_effects').equipment_effect;
                         response.equipment_effects = response.equipment_effects.map(effect => data.find(e => e.crossplayID === effect.equipmentEffectID) ?? effect);
                         data = getE4KData('equipments').equipment;
                         response.equipments = response.equipments.map(equipment => data.find(e => e.crossplayID === equipment.equipmentID) ?? equipment);
-                        response.effects.push(...getE4KData('effects').effect);
 
                         this.response = this.responseText = JSON.stringify(response);
                     }
@@ -409,27 +409,20 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                     data = data.split('%%');
                     let payload = JSON.parse(data[5]);
                     if (payload.LT) {
-                        payload = {NM: payload.NOM, PW: payload.LT, L: payload.LANG, AID: payload.AID, DID: payload.DID, PLFID: payload.PLFID, ADID: "null", AFUID: "appsFlyerUID", IDFV: null};
-                        data[5] = JSON.stringify(payload);
-                        data[3] = 'core_lga';
-                        data = data.join('%%');
+                        payload.PW = payload.LT;
                     }
-                    else {
-                        payload = {NM: payload.NOM, PW: payload.PW, L: payload.LANG, AID: payload.AID, DID: payload.DID, PLFID: payload.PLFID, ADID: "null", AFUID: "appsFlyerUID", IDFV: null};
-                        data[5] = JSON.stringify(payload);
-                        data[3] = 'core_lga';
-                        data = data.join('%%');
-                        localSocket.send(`send#${data}`);
-                        super.send(data);
-
-                        data = data.split('%%');
-                        payload = {LN: payload.NM, P: payload.PW};
-                        data[5] = JSON.stringify(payload);
-                        data[3] = 'core_avl';
-                        data = data.join('%%');
-                        this.send(data);
-                        return;
+                    else if (payload.PL) {
+                        let d = data.slice();
+                        let p = {LN: payload.NOM, P: payload.PW};
+                        d[5] = JSON.stringify(p);
+                        d[3] = 'core_avl';
+                        d = d.join('%%');
+                        this.send(d);
                     }
+                    payload = {NM: payload.NOM, PW: payload.PW, L: payload.LANG, AID: payload.AID, DID: payload.DID, PLFID: payload.PLFID, ADID: "null", AFUID: "appsFlyerUID", IDFV: null};
+                    data[5] = JSON.stringify(payload);
+                    data[3] = 'core_lga';
+                    data = data.join('%%');
                 }
                 else if (data.includes('%%lre%%1%%')) {
                     data = data.split('%%');
@@ -438,8 +431,7 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                     data[5] = JSON.stringify(payload);
                     data[3] = 'core_reg';
                     data = data.join('%%');
-                    localSocket.send(`send#${data}`);
-                    super.send(data);
+                    this.send(data);
 
                     data = data.split('%%');
                     payload = {NM: payload.PN, PW: payload.PW, L: payload.LANG, AID: payload.AID, DID: payload.DID, PLFID: payload.PLFID, ADID: payload.ADID, AFUID: payload.AFUID, IDFV: payload.IDFV};
@@ -453,8 +445,6 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                     data[5] = JSON.stringify(payload);
                     data[3] = 'core_avl';
                     data = data.join('%%');
-                    this.send(data);
-                    return;
                 }               
                 else if (data.includes('%%sbp%%1%%')) {
                     data = data.split('%%');
