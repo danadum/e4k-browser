@@ -1,4 +1,3 @@
-import urllib.parse
 from websocket_server import WebsocketServer
 
 from selenium import webdriver
@@ -16,7 +15,7 @@ import traceback
 import time
 import requests
 import os
-import urllib
+import urllib.parse
 
 def open_browser(game_url, on_ready):
     options = webdriver.ChromeOptions()
@@ -189,9 +188,15 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                         response.achievements = getE4KData('achievements').achievement;
                         response.crestsymbols = getE4KData('crestsymbols').crestsymbol;
                         response.subscriptionsBuffs = getE4KData('subscriptionsBuffs').subscriptionsBuff;
-                        response.effects = getE4KData('effects').effect;
+                        response.rewards = getE4KData('rewards').reward;
+                        response.tempServerRankRewards = getE4KData('tempServerRankRewards').tempServerRankReward;
+                        response.allianceBattleGroundRankRewards = getE4KData('allianceBattleGroundRankRewards').allianceBattleGroundRankReward;
+                        response.leaguetypeTopXSizes = getE4KData('leaguetypeTopXSizes').leaguetypeTopXSize;
+                        response.leaguetypeevents = getE4KData('leaguetypeEvents').leaguetypeevent;
 
-                        let data = getE4KData('units').unit;
+                        let data = getE4KData('effects').effect;
+                        response.effects = response.effects.filter(effect => !data.some(e => e.effectID === effect.effectID)).concat(data);
+                        data = getE4KData('units').unit;
                         response.units = response.units.map(unit => ({...data.find(u => +u.crossplayID === unit.wodID) ?? unit, type: unit.type}));
                         data = getE4KData('equipment_effects').equipment_effect;
                         response.equipment_effects = response.equipment_effects.map(effect => data.find(e => e.crossplayID === effect.equipmentEffectID) ?? effect);
@@ -209,7 +214,7 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                         request.open('GET', `https://langserv.public.ggs-ep.com/e4k/${lang}/*`, false)
                         request.send();
                         let e4kLang = JSON.parse(request.responseText);
-                        response = {...response, ...e4kLang};
+                        response = {...response, ...e4kLang, ...Object.keys(response).filter(key => key.startsWith('dialog_alliance_rank')).reduce((obj, key) => ({...obj, [key]: response[key]}), {})};
                         this.response = this.responseText = JSON.stringify(response);
                     }
                     else if (type === 'readystatechange' &&  this.readyState === 4 && /Crest\/CastleCrestSymbols\/CastleCrestSymbols--[0-9]*.js$/.test(this.url)) {
