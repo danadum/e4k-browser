@@ -18,19 +18,46 @@ import os
 import urllib.parse
 
 def open_browser(game_url, on_ready):
+    port = 9222
     options = webdriver.ChromeOptions()
-    options.add_argument('--no-sandbox')
     options.add_argument("--start-maximized")
     options.add_argument("--allow-running-insecure-content")
     options.add_argument(f"--user-data-dir={os.path.join(os.getcwd(), 'user-data')}")
+    options.add_argument(f"--remote-debugging-port={port}")
     options.add_experimental_option("excludeSwitches", ["enable-automation"])
     options.add_experimental_option("detach", True)
     driver = webdriver.Chrome(options=options)
 
     driver.get(game_url)
-    iframe = start_game(driver, on_ready)
-    threading.Thread(target=watch_reload, args=(driver, iframe, on_ready), daemon=True).start()
+    threading.Thread(target=watch_reload, args=(driver, on_ready), daemon=True).start()
     threading.Thread(target=watch_webshop, args=(driver,), daemon=True).start()
+    threading.Thread(target=watch_new_tab, args=(on_ready, port), daemon=True).start()
+
+def watch_new_tab(on_ready, port):
+    while True:
+        try:
+            options = webdriver.ChromeOptions()
+            options.add_experimental_option("debuggerAddress", f"localhost:{port}")
+            driver = webdriver.Chrome(options=options)
+            window_handles = set(driver.window_handles)
+
+            WebDriverWait(driver, float('inf')).until(EC.any_of(EC.number_of_windows_to_be(len(window_handles) + 1), EC.number_of_windows_to_be(len(window_handles) - 1)))
+            if len(driver.window_handles) <= len(window_handles):
+                continue
+            driver.switch_to.window(next(iter(set(driver.window_handles) - window_handles)))
+            threading.Thread(target=watch_reload, args=(driver, on_ready), daemon=True).start()
+            threading.Thread(target=watch_webshop, args=(driver,), daemon=True).start()
+        except Exception as e:
+            if isinstance(e, WebDriverException) and "target frame detached" in str(e):
+                pass
+            elif isinstance(e, WebDriverException) and "unknown error: cannot determine loading status" in str(e):
+                pass
+            elif isinstance(e, WebDriverException) and "unknown error: bad inspector message" in str(e):
+                pass
+            else:
+                traceback.print_exc()
+                _thread.interrupt_main()
+                sys.exit()
 
 def start_game(webdriver, on_ready):
     webdriver.set_network_conditions(offline=True, latency=1000, throughput=0)
@@ -39,8 +66,8 @@ def start_game(webdriver, on_ready):
     webdriver.refresh()
     wait = WebDriverWait(webdriver, 30, poll_frequency=0.01)
     wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'body[style*="background-image"]')))
-    wait.until(EC.presence_of_element_located((By.ID, 'game')))
-    iframe = webdriver.find_element(By.ID, 'game')
+    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'iframe#game')))
+    iframe = webdriver.find_element(By.CSS_SELECTOR, 'iframe#game')
     webdriver.switch_to.frame(iframe)
     webdriver.execute_script(on_ready)
     webdriver.switch_to.default_content()
@@ -62,7 +89,7 @@ def watch_webshop(webdriver):
             args['lemonstand.customization.url'] = f"data:text/json;charset=utf-8,{urllib.parse.quote(json.dumps(customization))}"
             url = f"{url}?locale={args['locale']}&zoneId={args['zoneId']}&criteria={args['criteria']}&lemonstand.customization.url={args['lemonstand.customization.url']}"
             
-            gameframe = webdriver.find_element(By.ID, 'game')
+            gameframe = webdriver.find_element(By.CSS_SELECTOR, 'iframe#game')
             webdriver.switch_to.frame(gameframe)
             network_id, server_id, player_id = webdriver.execute_script("return [window.networkId, window.serverId, window.playerId]")
             webdriver.switch_to.default_content()
@@ -93,11 +120,12 @@ def watch_webshop(webdriver):
                 traceback.print_exc()
                 break
 
-def watch_reload(webdriver, iframe, on_ready):
+def watch_reload(webdriver, on_ready):
     while True:
         try:
-            WebDriverWait(webdriver, float('inf')).until(EC.staleness_of(iframe))
+            WebDriverWait(webdriver, float('inf')).until(EC.presence_of_element_located((By.CSS_SELECTOR, 'iframe#game')))
             iframe = start_game(webdriver, on_ready)
+            WebDriverWait(webdriver, float('inf')).until(EC.staleness_of(iframe))
         except Exception as e:
             if isinstance(e, WebDriverException) and "target frame detached" in str(e):
                 pass
@@ -107,8 +135,7 @@ def watch_reload(webdriver, iframe, on_ready):
                 pass
             else:
                 traceback.print_exc()
-                _thread.interrupt_main()
-                sys.exit()
+                break
 
 def get_server_version():
     with connect(f"wss://ep-live-mz-int1-sk1-gb1-game.goodgamestudios.com:443") as websocket:
@@ -152,8 +179,6 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
             return JSON.parse(request.responseText, (key, value, data) => typeof value === 'number' && key !== 'wodID' && key !== 'minLevel' ? data.source : typeof value === 'string' ? value.replaceAll('&amp;', '&') : value);
         }
 
-        window.buidings = getE4KData('buildings').building;
-
         const originalXMLHttpRequest = window.XMLHttpRequest;
         window.XMLHttpRequest = class extends originalXMLHttpRequest {
             open(method, url, async, user, password) {
@@ -193,9 +218,13 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                         response.allianceBattleGroundRankRewards = getE4KData('allianceBattleGroundRankRewards').allianceBattleGroundRankReward;
                         response.leaguetypeTopXSizes = getE4KData('leaguetypeTopXSizes').leaguetypeTopXSize;
                         response.leaguetypeevents = getE4KData('leaguetypeEvents').leaguetypeevent;
+                        response.sceatSkills = getE4KData('sceatSkills').sceatSkill;
+                        response.sceatSkillTiers = getE4KData('sceatSkillTiers').sceatSkillTier;
 
                         let data = getE4KData('effects').effect;
                         response.effects = response.effects.filter(effect => !data.some(e => e.effectID === effect.effectID)).concat(data);
+                        data = getE4KData('buildings').building;
+                        window.buildings = response.buildings = response.buildings.filter(building => !data.some(b => b.wodID === building.wodID)).concat(data);
                         data = getE4KData('units').unit;
                         response.units = response.units.map(unit => ({...data.find(u => +u.crossplayID === unit.wodID) ?? unit, type: unit.type}));
                         data = getE4KData('equipment_effects').equipment_effect;
@@ -214,7 +243,7 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                         request.open('GET', `https://langserv.public.ggs-ep.com/e4k/${lang}/*`, false)
                         request.send();
                         let e4kLang = JSON.parse(request.responseText);
-                        response = {...response, ...e4kLang, ...Object.keys(response).filter(key => key.startsWith('dialog_alliance_rank')).reduce((obj, key) => ({...obj, [key]: response[key]}), {})};
+                        response = {...response, ...e4kLang, ...Object.fromEntries(Object.entries(response).filter(([key]) => key.startsWith('dialog_alliance_rank')))};
                         this.response = this.responseText = JSON.stringify(response);
                     }
                     else if (type === 'readystatechange' &&  this.readyState === 4 && /Crest\/CastleCrestSymbols\/CastleCrestSymbols--[0-9]*.js$/.test(this.url)) {
@@ -352,14 +381,30 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                                 }
                                 window.playerId = payload.gpi.PID;
                             }
-                            else if (data[2] === 'jaa' && data[4] === '0') {
+                            else if ((data[2] === 'jaa' || data[2] === 'ebe') && data[4] === '0') {
                                 let payload = JSON.parse(data[5]);
-                                for (let building of payload.gca.BD) {
-                                    let e4kBuilding = window.buidings.find(b => b.wodID === building[0]);
-                                    if (e4kBuilding && e4kBuilding.crossplayID && e4kBuilding.crossplayID !== building[0]) building[0] = e4kBuilding.crossplayID;
-                                    if (e4kBuilding && Object.keys(e4kBuilding).some(key => key.endsWith('production'))) building[9] = ~~(building[9] * 100);
-                                    else building[9] = -1;
-                                }
+                                payload.gca.BD = payload.gca.BD.map(building => {
+                                    let b = window.buildings.find(b => b.wodID === building[0]);
+                                    building[9] = b && Object.keys(b).some(key => key.endsWith('production')) ? ~~(building[9] * 100) : -1;
+                                    return building;
+                                });
+                                payload.gca.T = payload.gca.T.map(building => (building[9] = -1, building));
+                                payload.gca.FP = payload.gca.FP?.map(building => (building[9] = -1, building));
+                                data[5] = JSON.stringify(payload);
+                            }
+                            else if (data[2] === 'gcb' && data[4] === '0') {
+                                let payload = JSON.parse(data[5]);
+                                payload.B = payload.B.map(building => {
+                                    let b = window.buildings.find(b => b.wodID === building[0]);
+                                    building[9] = b && Object.keys(b).some(key => key.endsWith('production')) ? ~~(building[9] * 100) : -1;
+                                    return building;
+                                });
+                                data[5] = JSON.stringify(payload);
+                            }
+                            else if (data[2] === 'ego' && data[4] === '0') {
+                                let payload = JSON.parse(data[5]);
+                                let b = window.buildings.find(b => b.wodID === payload.O[0]);
+                                payload.O[9] = b && Object.keys(b).some(key => key.endsWith('production')) ? ~~(payload.O[9] * 100) : -1;
                                 data[5] = JSON.stringify(payload);
                             }
                             else if (data[2] === 'ams' && data[4] === '0') {
