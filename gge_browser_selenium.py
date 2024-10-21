@@ -224,6 +224,7 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                         let data = getE4KData('effects').effect;
                         response.effects = response.effects.filter(effect => !data.some(e => e.effectID === effect.effectID)).concat(data);
                         data = getE4KData('buildings').building;
+                        data = data.map(building => ({...building, type: response.buildings.find(b => b.wodID === +(building.crossplayID ?? building.wodID))?.type ?? building.type}));
                         window.buildings = response.buildings = response.buildings.filter(building => !data.some(b => b.wodID === building.wodID)).concat(data);
                         data = getE4KData('units').unit;
                         response.units = response.units.map(unit => ({...data.find(u => +u.crossplayID === unit.wodID) ?? unit, type: unit.type}));
