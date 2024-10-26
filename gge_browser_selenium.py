@@ -232,6 +232,8 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                         response.equipment_effects = response.equipment_effects.map(effect => data.find(e => e.crossplayID === effect.equipmentEffectID) ?? effect);
                         data = getE4KData('equipments').equipment;
                         response.equipments = response.equipments.map(equipment => data.find(e => e.crossplayID === equipment.equipmentID) ?? equipment);
+                        data = getE4KData('researches').research.filter(research => research.crossplayID || !research.unwalkable);
+                        response.researches = data.map(research => !research.x ? research : ({...research, ...(({x, y, ...rest}) => ({x, y}))(response.researches.find(r => r.researchID === research.crossplayID) ?? {y: 6})})).filter(research => !(research.y > 5));
 
                         this.response = this.responseText = JSON.stringify(response);
                     }
