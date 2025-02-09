@@ -15,14 +15,14 @@ class WebsocketServer:
         self.closed = asyncio.Event()
 
 
-    async def handler(self, websocket, path):
-        self.on_connection and self.on_connection(websocket, path)
+    async def handler(self, websocket):
+        self.on_connection and self.on_connection(websocket)
         self.clients.append(websocket)
         try:
             async for message in websocket:
                 self.on_message and self.on_message(websocket, message)
         finally:
-            self.on_disconnection and self.on_disconnection(websocket, path)
+            self.on_disconnection and self.on_disconnection(websocket)
             self.clients.remove(websocket)
 
     async def start(self):

@@ -16,6 +16,7 @@ import time
 import requests
 import os
 import urllib.parse
+import base64
 
 def open_browser(game_url, on_ready):
     port = 9222
@@ -86,7 +87,7 @@ def watch_webshop(webdriver):
             customization = r.json()
             customization['categories']['vouchers']['enabled'] = True
             customization['platformContext']['storeIntegrationType'] = "embedded"
-            args['lemonstand.customization.url'] = f"data:text/json;charset=utf-8,{urllib.parse.quote(json.dumps(customization))}"
+            args['lemonstand.customization.url'] = f"data:text/json;base64,{base64.b64encode(json.dumps(customization).encode()).decode()}"
             url = f"{url}?locale={args['locale']}&zoneId={args['zoneId']}&criteria={args['criteria']}&lemonstand.customization.url={args['lemonstand.customization.url']}"
             
             gameframe = webdriver.find_element(By.CSS_SELECTOR, 'iframe#game')
@@ -166,7 +167,7 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
         elif type == 'log' and ws_mock.on_log:
             ws_mock.on_log(ws_mock, data)
 
-    ws_mock.ws_server = WebsocketServer(ws_server_port,on_message=on_server_message)
+    ws_mock.ws_server = WebsocketServer(ws_server_port, on_message=on_server_message)
     threading.Thread(target=ws_mock.ws_server.start_sync, daemon=True).start()
 
     server_version = get_server_version()
@@ -230,7 +231,7 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                             return building;
                         });
                         data = data.map(building => ({...building, type: response.buildings.find(b => b.wodID === +(building.crossplayID ?? building.wodID))?.type ?? building.type}));
-                        response.buildings = response.buildings.filter(building => building.wodID !== 1506 && !data.some(b => b.wodID === building.wodID)).concat(data);
+                        window.buildings = response.buildings = response.buildings.filter(building => building.wodID !== 1506 && !data.some(b => b.wodID === building.wodID)).concat(data);
                         data = getE4KData('units').unit;
                         response.units = response.units.map(unit => ({...data.find(u => +u.crossplayID === unit.wodID) ?? unit, type: unit.type}));
                         data = getE4KData('equipment_effects').equipment_effect;
@@ -271,7 +272,7 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
 
         window.sockets = [];
 
-        const localSocket = new WebSocket('ws://localhost:%i');
+        const localSocket = window.localSocket = new WebSocket('ws://localhost:%i');
         localSocket.addEventListener('message', async (event) => {
             let data = await event.data;
             window.sockets.forEach(socket => socket.send(data));
@@ -335,6 +336,9 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                                 if (data[4] === '10021') data[4] = '22';
                                 if (data[4] === '10022') data[4] = '28';
                                 if (data[4] === '10023') data[4] = '70';
+                            }
+                            else if (data[2] === 'tse' && data[4] === '0') {
+                                this.dispatchEvent(new MessageEvent('message', {data: new Blob(["%%xt%%lli%%1%%0%%"])}));
                             }
                             else if (data[2] === 'core_avl' && data[4] === '10005') {
                                 let payload = JSON.parse(data[5]);
