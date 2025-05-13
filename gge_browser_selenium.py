@@ -217,7 +217,6 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                         response.rewards = getE4KData('rewards').reward;
                         response.tempServerRankRewards = getE4KData('tempServerRankRewards').tempServerRankReward;
                         response.allianceBattleGroundRankRewards = getE4KData('allianceBattleGroundRankRewards').allianceBattleGroundRankReward;
-                        response.leaguetypeTopXSizes = getE4KData('leaguetypeTopXSizes').leaguetypeTopXSize;
                         response.leaguetypeevents = getE4KData('leaguetypeEvents').leaguetypeevent;
                         response.sceatSkills = getE4KData('sceatSkills').sceatSkill;
                         response.sceatSkillTiers = getE4KData('sceatSkillTiers').sceatSkillTier;
