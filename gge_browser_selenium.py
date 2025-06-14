@@ -191,7 +191,7 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                     url = url.replace(/\/players\/12-[0-9]+-[0-9]+-/, `/players/16-${window.networkId}-${window.serverId}-`);
                 }
                 else if (url.startsWith('https://accounts.public.ggs-ep.com/players')) {
-                    url = "https://sheltered-everglades-24913.fly.dev/" + url.replace(/\/players\/12-[0-9]+-[0-9]+-/, `/players/16-${window.networkId}-${window.serverId}-`);
+                    url = "https://cors-buster.fly.dev/" + url.replace(/\/players\/12-[0-9]+-[0-9]+-/, `/players/16-${window.networkId}-${window.serverId}-`);
                 }
                 else if (url.startsWith('https://gdpr-delete.public.ggs-ep.com/players')) {
                     url = url.replace(/\/players\/12-[0-9]+-[0-9]+-/, `/players/16-${window.networkId}-${window.serverId}-`);
