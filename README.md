@@ -1,6 +1,6 @@
 # e4k-browser
 
-Python code to open the game Empire: Four Kingdoms in a browser with control over the game socket from the code.
+Library in python to open the game [Empire: Four Kingdoms](https://play.google.com/store/apps/details?id=air.com.goodgamestudios.empirefourkingdoms) in a browser with control over the game socket from the code.
 
 ## Installation
 
@@ -25,6 +25,7 @@ If it doesn't works and open GGE servers instead, try to refresh the webpage a f
 This could be considered by ggs as using a bot, so use it at your own risks!
 
 Also some functionnalities of the game are currently not supported, and are not planned to be for now. Those includes:
+
 - cash ingame special offers
 - a few bugs in beginner tutorial
 

@@ -1,22 +1,21 @@
-from websocket_server import WebsocketServer
+import threading
+import traceback
+import os
+import json
+import time
+import requests
+import urllib.parse
+import base64
+from websockets.sync.client import connect
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import WebDriverException
-from websockets.sync.client import connect
 
-import json
-import threading
-import _thread
-import sys
-import traceback
-import time
-import requests
-import os
-import urllib.parse
-import base64
+from lib.websocket_server import WebsocketServer
+
 
 def open_browser(game_url, on_ready):
     port = 9222
@@ -29,36 +28,15 @@ def open_browser(game_url, on_ready):
     options.add_experimental_option("detach", True)
     driver = webdriver.Chrome(options=options)
 
+    windows = driver.window_handles
+    if len(windows) > 1:
+        driver.switch_to.window(windows[0])
+        driver.close()
+        driver.switch_to.window(windows[1])
+
     driver.get(game_url)
     threading.Thread(target=watch_reload, args=(driver, on_ready), daemon=True).start()
     threading.Thread(target=watch_webshop, args=(driver,), daemon=True).start()
-    threading.Thread(target=watch_new_tab, args=(on_ready, port), daemon=True).start()
-
-def watch_new_tab(on_ready, port):
-    while True:
-        try:
-            options = webdriver.ChromeOptions()
-            options.add_experimental_option("debuggerAddress", f"localhost:{port}")
-            driver = webdriver.Chrome(options=options)
-            window_handles = set(driver.window_handles)
-
-            WebDriverWait(driver, float('inf')).until(EC.any_of(EC.number_of_windows_to_be(len(window_handles) + 1), EC.number_of_windows_to_be(len(window_handles) - 1)))
-            if len(driver.window_handles) <= len(window_handles):
-                continue
-            driver.switch_to.window(next(iter(set(driver.window_handles) - window_handles)))
-            threading.Thread(target=watch_reload, args=(driver, on_ready), daemon=True).start()
-            threading.Thread(target=watch_webshop, args=(driver,), daemon=True).start()
-        except Exception as e:
-            if isinstance(e, WebDriverException) and "target frame detached" in str(e):
-                pass
-            elif isinstance(e, WebDriverException) and "unknown error: cannot determine loading status" in str(e):
-                pass
-            elif isinstance(e, WebDriverException) and "unknown error: bad inspector message" in str(e):
-                pass
-            else:
-                traceback.print_exc()
-                _thread.interrupt_main()
-                sys.exit()
 
 def start_game(webdriver, on_ready):
     webdriver.set_network_conditions(offline=True, latency=1000, throughput=0)
@@ -83,6 +61,7 @@ def watch_webshop(webdriver):
             iframe = webdriver.find_element(By.CSS_SELECTOR, 'iframe#dialog[src^="https://canvas.goodgamestudios.com"]')
             url, args = iframe.get_attribute('src').split('?', 1)
             args = {k: v for k, v in (arg.split('=', 1) for arg in args.split('&'))}
+            
             r = requests.get(urllib.parse.unquote(args['lemonstand.customization.url'].replace('em.json', 'mbs.json')))
             customization = r.json()
             customization['categories']['vouchers']['enabled'] = True
@@ -121,6 +100,7 @@ def watch_webshop(webdriver):
                 traceback.print_exc()
                 break
 
+
 def watch_reload(webdriver, on_ready):
     while True:
         try:
@@ -138,6 +118,7 @@ def watch_reload(webdriver, on_ready):
                 traceback.print_exc()
                 break
 
+
 def get_server_version():
     with connect(f"wss://ep-live-mz-int1-sk1-gb1-game.goodgamestudios.com:443") as websocket:
         websocket.send("<msg t='sys'><body action='login' r='0'><login z='EmpireEx'><nick><![CDATA[]]></nick><pword><![CDATA[1113030%fr%0]]></pword></login></body></msg>")
@@ -149,26 +130,16 @@ def get_server_version():
         message = message.decode('utf-8').split('%')
         return message[5]
 
-def connect_with_browser(ws_mock, game_url, ws_server_port):
-    def on_server_message(ws, message):
-        type, data = message.split('#', 1)
-        if type == 'send' and ws_mock.on_send:
-            ws_mock.on_send(ws_mock, data)
-        elif type == 'open' and ws_mock.on_open:
-            ws_mock.on_open(ws_mock)
-        elif type == 'close' and ws_mock.on_close:
-            close_data = json.loads(data)
-            ws_mock.on_close(ws_mock, close_data.get('code', ''), close_data.get('reason', ''))
-        elif type == 'error' and ws_mock.on_error:
-            error_data = json.loads(data)
-            ws_mock.on_error(ws_mock, error_data.get('message', ''))
-        elif type == 'message' and ws_mock.on_message:
-            ws_mock.on_message(ws_mock, data)
-        elif type == 'log' and ws_mock.on_log:
-            ws_mock.on_log(ws_mock, data)
 
-    ws_mock.ws_server = WebsocketServer(ws_server_port, on_message=on_server_message)
-    threading.Thread(target=ws_mock.ws_server.start_sync, daemon=True).start()
+def connect_with_browser(socket, game_url, ws_server_port, servers_list="https://raw.githubusercontent.com/danadum/ggs-assets/main/e4k/network.xml"):
+    ws_server = WebsocketServer(
+        ws_server_port,
+        on_message=lambda ws, msg: socket.send(msg),
+        on_connection=lambda ws: socket.open(ws.request.path.strip("/")),
+        on_disconnection=lambda ws: socket.close()
+    )
+    socket.set_ws_server(ws_server)
+    threading.Thread(target=ws_server.start_sync, daemon=True).start()
 
     server_version = get_server_version()
 
@@ -185,7 +156,7 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
             open(method, url, async, user, password) {
                 this.url = url;
                 if (/config\/network\/[0-9]+\.xml/.test(url)) {
-                    url = "https://raw.githubusercontent.com/danadum/ggs-assets/main/e4k/network.xml";
+                    url = "%s";
                 }
                 else if (url.startsWith('https://player-kv.public.ggs-ep.com/api/players')) {
                     url = url.replace(/\/players\/12-[0-9]+-[0-9]+-/, `/players/16-${window.networkId}-${window.serverId}-`);
@@ -269,185 +240,172 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
             }
         };
 
-        window.sockets = [];
-
-        const localSocket = window.localSocket = new WebSocket('ws://localhost:%i');
-        localSocket.addEventListener('message', async (event) => {
-            let data = await event.data;
-            window.sockets.forEach(socket => socket.send(data));
-        });
-
         const originalWebSocket = window.WebSocket;
         window.WebSocket = class extends originalWebSocket {
             constructor(url, protocols) {
-                localSocket.send(`log#Original websocket url: ${url}`);             
-                if (url.startsWith('wss://e4k-live')) {
-                    url = url.replace('wss://', 'ws://').replace(':443', ':80');
-                }
-                localSocket.send(`log#Modified websocket url: ${url}`);
+                super(`ws://localhost:%i/${url}`, protocols);
+                window.socket = this;
+                this.opened = false;
 
-                super(url, protocols);
-                window.sockets.push(this);
-
-                this.addEventListener('open', event => {
-                    localSocket.send(`open#`);
-                });
-
-                this.addEventListener('close', event => {
-                    localSocket.send(`close#${JSON.stringify({code: event.code, reason: event.reason})}`);
-                    window.sockets = window.sockets.filter(socket => socket !== this);
-                });
-
-                this.addEventListener('error', event => {
-                    localSocket.send(`error#${JSON.stringify({message: event.data})}`);
+                Object.defineProperty(this, "onopen", {
+                    set(fn) {
+                        this.original_onopen = fn;
+                        return this.addEventListener('open', event => {});
+                    }
                 });
 
                 Object.defineProperty(this, "onmessage", {
                     set(fn) {
                         this.original_onmessage = fn;
                         return this.addEventListener('message', async (event) => {
-                            let data = await event.data.text();
-                            data = data.replaceAll(/&#(\d+);/g, "&$1;");
-                            data = data.split('%%');
+                            if (this.opened) {
+                                let data = await event.data.text();
+                                data = data.replaceAll(/&#(\d+);/g, "&$1;");
+                                data = data.split('%%');
 
-                            if (data[2] === 'vpn') {
-                                if (data[4] === '10005') data[4] = '0';
-                                if (data[4] === '10021') data[4] = '22';
-                                if (data[4] === '10022') data[4] = '28';
-                                if (data[4] === '10023') data[4] = '70';
-                            }
-                            else if (data[2] === 'vln') {
-                                if (data[4] === '10005') data[4] = '0';
-                                if (data[4] === '10010') data[4] = '21';
-                            }
-                            else if (data[2] === 'core_lga') {
-                                data[2] = 'lli';
-                                if (data[4] === '10005') data[4] = '0';
-                                if (data[4] === '10010') data[4] = '21';
-                                if (data[4] === '10011') data[4] = '20';
-                            }
-                            else if (data[2] === 'core_reg') {
-                                data[2] = 'lre';
-                                if (data[4] === '10005') data[4] = '0';
-                                if (data[4] === '10007') data[4] = '3';
-                                if (data[4] === '10018') data[4] = '24';
-                                if (data[4] === '10019') data[4] = '23';
-                                if (data[4] === '10021') data[4] = '22';
-                                if (data[4] === '10022') data[4] = '28';
-                                if (data[4] === '10023') data[4] = '70';
-                            }
-                            else if (data[2] === 'tse' && data[4] === '0') {
-                                this.dispatchEvent(new MessageEvent('message', {data: new Blob(["%%xt%%lli%%1%%0%%"])}));
-                            }
-                            else if (data[2] === 'core_avl' && data[4] === '10005') {
-                                let payload = JSON.parse(data[5]);
-                                payload = {LT: payload.P};
-                                data[5] = JSON.stringify(payload);
-                                data[4] = '0';
-                                data[2] = 'slt';
-                            }
-                            else if (data[2] === 'core_pol' && data[4] === '10005') {
-                                let payload = JSON.parse(data[5]);
-                                for (let offer of payload) {
-                                    for (let dialog of offer.OD) {
-                                        for (let component of dialog.visualComponents ?? []) {
-                                            if (component.name === 'offersHub') {
-                                                dialog.visualComponents = dialog.visualComponents.filter(c => c !== component);
-                                                if (dialog.visualComponents.some(c => c.name === 'offerDialog' && c.params.DN === 'BestsellerShopDialog' && c.params.AS === false)) {
-                                                    dialog.visualComponents.push({"name": "interfaceButton", "params": {"BT": "Btn_BestsellerShop", "PT": 6, "TID": "dialog_privateBestsellerShop_title"}});
-                                                }
-                                                else if (dialog.visualComponents.some(c => c.name === 'offerDialog' && c.params.DN === 'BestsellerShopDialog' && c.params.AS === true)) {}
-                                                else if (offer.OD.length > 1) {
-                                                    dialog.visualComponents.push({"name": "failedDialog","params": {"AS": true,"OS": [443,423],"DN": "CastlePOWhaleChestFinishExternal"}},{"name": "finishDialog","params": {"AS": true,"DN": "CastlePOStandardOKExternal"}},{"name": "questDialog","params": {"AS": false,"DN": "CastlePOMultiChest"}},{"name": "offerDialog","params": {"AS": false,"DN": "CastlePOMultiChest","DC": {"BAB": 1,"OT": 1,"CID": "dialog_privateOffer_whaleChest_descripton1"}}},{"name": "interfaceButton","params": {"BT": "Btn_POMultiChest","OS": true,"PT": 6,"TID": "dialog_primeday_specialoffer_title"}});
-                                                }
-                                                else if (offer.QD?.conditions?.some(condition => condition.name === 'cashOfferPackage')) {}
-                                                else {
-                                                    dialog.visualComponents.push({"name": "finishDialog","params": {"AS": true,"OS": [423,443],"DN": "CastlePaymentRewardSpecialOfferFinish"}},{"name": "questDialog","params": {"AS": false,"DN": "CastlePrivatePrimeDayDynamicDialog","DC": {"HL": [],"LEID": {"TXT": {"TXT1": {"A": [250],"ID": "dialog_specialOffer_bonus_1"},"TXT0": {"A": [2000000],"ID": "dialog_specialOffer_bonus_0"}},"ID": -1,"ICON": "icon_hc_rubi_rm"},"REID": {"TXT": {"TXT0": {"A": [],"ID": "dialog_specialOffer_limitedTime"}},"ID": -1},"ID": "fullScreenOfferDC","RM": {"A": [19000],"T": 0},"TSID": 42,"TID": "dialog_specialOffer_title_1","SID": 1}}},{"name": "interfaceButton","params": {"BT": "Btn_POMultiChest","OS": true,"PT": 6,"TID": "dialog_primeday_specialoffer_title"}});
+                                if (data[2] === 'vpn') {
+                                    if (data[4] === '10005') data[4] = '0';
+                                    if (data[4] === '10021') data[4] = '22';
+                                    if (data[4] === '10022') data[4] = '28';
+                                    if (data[4] === '10023') data[4] = '70';
+                                }
+                                else if (data[2] === 'vln') {
+                                    if (data[4] === '10005') data[4] = '0';
+                                    if (data[4] === '10010') data[4] = '21';
+                                }
+                                else if (data[2] === 'core_lga') {
+                                    data[2] = 'lli';
+                                    if (data[4] === '10005') data[4] = '0';
+                                    if (data[4] === '10010') data[4] = '21';
+                                    if (data[4] === '10011') data[4] = '20';
+                                }
+                                else if (data[2] === 'core_reg') {
+                                    data[2] = 'lre';
+                                    if (data[4] === '10005') data[4] = '0';
+                                    if (data[4] === '10007') data[4] = '3';
+                                    if (data[4] === '10018') data[4] = '24';
+                                    if (data[4] === '10019') data[4] = '23';
+                                    if (data[4] === '10021') data[4] = '22';
+                                    if (data[4] === '10022') data[4] = '28';
+                                    if (data[4] === '10023') data[4] = '70';
+                                }
+                                else if (data[2] === 'tse' && data[4] === '0') {
+                                    this.dispatchEvent(new MessageEvent('message', {data: new Blob(["%%xt%%lli%%1%%0%%"])}));
+                                }
+                                else if (data[2] === 'core_avl' && data[4] === '10005') {
+                                    let payload = JSON.parse(data[5]);
+                                    payload = {LT: payload.P};
+                                    data[5] = JSON.stringify(payload);
+                                    data[4] = '0';
+                                    data[2] = 'slt';
+                                }
+                                else if (data[2] === 'core_pol' && data[4] === '10005') {
+                                    let payload = JSON.parse(data[5]);
+                                    for (let offer of payload) {
+                                        for (let dialog of offer.OD) {
+                                            for (let component of dialog.visualComponents ?? []) {
+                                                if (component.name === 'offersHub') {
+                                                    dialog.visualComponents = dialog.visualComponents.filter(c => c !== component);
+                                                    if (dialog.visualComponents.some(c => c.name === 'offerDialog' && c.params.DN === 'BestsellerShopDialog' && c.params.AS === false)) {
+                                                        dialog.visualComponents.push({"name": "interfaceButton", "params": {"BT": "Btn_BestsellerShop", "PT": 6, "TID": "dialog_privateBestsellerShop_title"}});
+                                                    }
+                                                    else if (dialog.visualComponents.some(c => c.name === 'offerDialog' && c.params.DN === 'BestsellerShopDialog' && c.params.AS === true)) {}
+                                                    else if (offer.OD.length > 1) {
+                                                        dialog.visualComponents.push({"name": "failedDialog","params": {"AS": true,"OS": [443,423],"DN": "CastlePOWhaleChestFinishExternal"}},{"name": "finishDialog","params": {"AS": true,"DN": "CastlePOStandardOKExternal"}},{"name": "questDialog","params": {"AS": false,"DN": "CastlePOMultiChest"}},{"name": "offerDialog","params": {"AS": false,"DN": "CastlePOMultiChest","DC": {"BAB": 1,"OT": 1,"CID": "dialog_privateOffer_whaleChest_descripton1"}}},{"name": "interfaceButton","params": {"BT": "Btn_POMultiChest","OS": true,"PT": 6,"TID": "dialog_primeday_specialoffer_title"}});
+                                                    }
+                                                    else if (offer.QD?.conditions?.some(condition => condition.name === 'cashOfferPackage')) {}
+                                                    else {
+                                                        dialog.visualComponents.push({"name": "finishDialog","params": {"AS": true,"OS": [423,443],"DN": "CastlePaymentRewardSpecialOfferFinish"}},{"name": "questDialog","params": {"AS": false,"DN": "CastlePrivatePrimeDayDynamicDialog","DC": {"HL": [],"LEID": {"TXT": {"TXT1": {"A": [250],"ID": "dialog_specialOffer_bonus_1"},"TXT0": {"A": [2000000],"ID": "dialog_specialOffer_bonus_0"}},"ID": -1,"ICON": "icon_hc_rubi_rm"},"REID": {"TXT": {"TXT0": {"A": [],"ID": "dialog_specialOffer_limitedTime"}},"ID": -1},"ID": "fullScreenOfferDC","RM": {"A": [19000],"T": 0},"TSID": 42,"TID": "dialog_specialOffer_title_1","SID": 1}}},{"name": "interfaceButton","params": {"BT": "Btn_POMultiChest","OS": true,"PT": 6,"TID": "dialog_primeday_specialoffer_title"}});
+                                                    }
                                                 }
                                             }
                                         }
                                     }
+                                    data[5] = JSON.stringify(payload);
                                 }
-                                data[5] = JSON.stringify(payload);
-                            }
-                            else if (data[2] === 'core_gpi' && data[4] === '0') {
-                                let payload = JSON.parse(data[5]);
-                                window.networkId = payload.networkId;
-                            }
-                            else if (data[2] === 'sei' && data[4] === '0') {
-                                let payload = JSON.parse(data[5]);
-                                let blacksmith = payload.E.findIndex(e => e.EID === 92);
-                                if (blacksmith !== -1) payload.E[blacksmith].EID = 116;
-                                data[5] = JSON.stringify(payload);
-                            }
-                            else if (data[2] === 'gbd' && data[4] === '0') {
-                                let payload = JSON.parse(data[5]);
-                                if (!payload.mvf.AFS) payload.mvf.AFS = payload.mvf.AF;
-                                if (!payload.sne) payload.sne = {MSG: []};
-                                data[5] = JSON.stringify(payload);
-                                this.send(`%%xt%%${this.serverKey}%%sne%%1%%{}%%`);
-                                if (payload.gal?.AID && payload.gal?.AID !== -1) {
-                                    this.send(`%%xt%%${this.serverKey}%%acl%%1%%{}%%`);
-                                    this.send(`%%xt%%${this.serverKey}%%ain%%1%%{"AID": ${payload.gal.AID}}%%`);
+                                else if (data[2] === 'core_gpi' && data[4] === '0') {
+                                    let payload = JSON.parse(data[5]);
+                                    window.networkId = payload.networkId;
                                 }
-                                window.playerId = payload.gpi.PID;
-                            }
-                            else if ((data[2] === 'jaa' || data[2] === 'ebe') && data[4] === '0') {
-                                let payload = JSON.parse(data[5]);
-                                payload.gca.BD = payload.gca.BD.map(building => {
-                                    let b = window.buildings.find(b => b.wodID === building[0]);
-                                    building[9] = b && Object.keys(b).some(key => key.endsWith('production')) ? ~~(building[9] * 100) : -1;
-                                    return building;
-                                });
-                                payload.gca.T = payload.gca.T.map(building => (building[9] = -1, building));
-                                payload.gca.FP = payload.gca.FP?.map(building => (building[9] = -1, building));
-                                data[5] = JSON.stringify(payload);
-                            }
-                            else if (data[2] === 'gcb' && data[4] === '0') {
-                                let payload = JSON.parse(data[5]);
-                                payload.B = payload.B.map(building => {
-                                    let b = window.buildings.find(b => b.wodID === building[0]);
-                                    building[9] = b && Object.keys(b).some(key => key.endsWith('production')) ? ~~(building[9] * 100) : -1;
-                                    return building;
-                                });
-                                data[5] = JSON.stringify(payload);
-                            }
-                            else if (data[2] === 'ego' && data[4] === '0') {
-                                let payload = JSON.parse(data[5]);
-                                let b = window.buildings.find(b => b.wodID === payload.O[0]);
-                                payload.O[9] = b && Object.keys(b).some(key => key.endsWith('production')) ? ~~(payload.O[9] * 100) : -1;
-                                data[5] = JSON.stringify(payload);
-                            }
-                            else if (data[2] === 'ams' && data[4] === '0') {
-                                let payload = JSON.parse(data[5]);
-                                if (payload.MIDS) {
-                                    payload.MID = payload.MIDS[0];
-                                    delete payload.MIDS;
+                                else if (data[2] === 'sei' && data[4] === '0') {
+                                    let payload = JSON.parse(data[5]);
+                                    let blacksmith = payload.E.findIndex(e => e.EID === 92);
+                                    if (blacksmith !== -1) payload.E[blacksmith].EID = 116;
+                                    data[5] = JSON.stringify(payload);
                                 }
-                                data[5] = JSON.stringify(payload);
-                            }
-                            else if (data[2] === 'gas' && data[4] === '0') {
-                                let payload = JSON.parse(data[5]);
-                                payload.S = payload.S.map(s => {
-                                    let army = JSON.parse(s.A);
-                                    army = [army[1][0], army[0][0], army[2][0], army[1][1], army[0][1], army[2][1]]
-                                    army = army.map(x => x?.filter((y, i) => i %% 3 !== 0));
-                                    s.A = JSON.stringify(army);
-                                    return s;
-                                });
-                                data[5] = JSON.stringify(payload);
-                            }
+                                else if (data[2] === 'gbd' && data[4] === '0') {
+                                    let payload = JSON.parse(data[5]);
+                                    if (!payload.mvf.AFS) payload.mvf.AFS = payload.mvf.AF;
+                                    if (!payload.sne) payload.sne = {MSG: []};
+                                    data[5] = JSON.stringify(payload);
+                                    this.send(`%%xt%%${this.serverKey}%%sne%%1%%{}%%`);
+                                    if (payload.gal?.AID && payload.gal?.AID !== -1) {
+                                        this.send(`%%xt%%${this.serverKey}%%acl%%1%%{}%%`);
+                                        this.send(`%%xt%%${this.serverKey}%%ain%%1%%{"AID": ${payload.gal.AID}}%%`);
+                                    }
+                                    window.playerId = payload.gpi.PID;
+                                }
+                                else if ((data[2] === 'jaa' || data[2] === 'ebe') && data[4] === '0') {
+                                    let payload = JSON.parse(data[5]);
+                                    payload.gca.BD = payload.gca.BD.map(building => {
+                                        let b = window.buildings.find(b => b.wodID === building[0]);
+                                        building[9] = b && Object.keys(b).some(key => key.endsWith('production')) ? ~~(building[9] * 100) : -1;
+                                        return building;
+                                    });
+                                    payload.gca.T = payload.gca.T.map(building => (building[9] = -1, building));
+                                    payload.gca.FP = payload.gca.FP?.map(building => (building[9] = -1, building));
+                                    data[5] = JSON.stringify(payload);
+                                }
+                                else if (data[2] === 'gcb' && data[4] === '0') {
+                                    let payload = JSON.parse(data[5]);
+                                    payload.B = payload.B.map(building => {
+                                        let b = window.buildings.find(b => b.wodID === building[0]);
+                                        building[9] = b && Object.keys(b).some(key => key.endsWith('production')) ? ~~(building[9] * 100) : -1;
+                                        return building;
+                                    });
+                                    data[5] = JSON.stringify(payload);
+                                }
+                                else if (data[2] === 'ego' && data[4] === '0') {
+                                    let payload = JSON.parse(data[5]);
+                                    let b = window.buildings.find(b => b.wodID === payload.O[0]);
+                                    payload.O[9] = b && Object.keys(b).some(key => key.endsWith('production')) ? ~~(payload.O[9] * 100) : -1;
+                                    data[5] = JSON.stringify(payload);
+                                }
+                                else if (data[2] === 'ams' && data[4] === '0') {
+                                    let payload = JSON.parse(data[5]);
+                                    if (payload.MIDS) {
+                                        payload.MID = payload.MIDS[0];
+                                        delete payload.MIDS;
+                                    }
+                                    data[5] = JSON.stringify(payload);
+                                }
+                                else if (data[2] === 'gas' && data[4] === '0') {
+                                    let payload = JSON.parse(data[5]);
+                                    payload.S = payload.S.map(s => {
+                                        let army = JSON.parse(s.A);
+                                        army = [army[1][0], army[0][0], army[2][0], army[1][1], army[0][1], army[2][1]]
+                                        army = army.map(x => x?.filter((y, i) => i %% 3 !== 0));
+                                        s.A = JSON.stringify(army);
+                                        return s;
+                                    });
+                                    data[5] = JSON.stringify(payload);
+                                }
 
-                            data = data.join('%%');
-                            event = new MessageEvent('message', {data: new Blob([data])});
-                            localSocket.send(`message#${data}`);
-                            fn(event);
+                                data = data.join('%%');
+                                event = new MessageEvent('message', {data: new Blob([data])});
+                            
+                                return fn(event);
+                            } else {
+                                this.opened = true;
+                                this.original_onopen(new Event('open'));
+                            }
                         });
                     }
                 });
             }
-
+            
             send(data) {
+                // Traduction des messages sortants (client -> serveur E4K)
                 data = data.replaceAll(/&(\d+);/g, "&#$1;");
 
                 if (data.includes("action='login'")) {
@@ -455,7 +413,6 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                     window.serverId = +(this.serverKey.split('_')?.[1] ?? 1);
                 }
                 else if (data.includes('%%vck%%1%%')) {
-                    localSocket.send(`send#${data}`);
                     data = "%%xt%%vck%%1%%0%%%s%%37.0.0%%";
                     this.dispatchEvent(new MessageEvent('message', {data: new Blob([data])}));
                     return;
@@ -534,10 +491,9 @@ def connect_with_browser(ws_mock, game_url, ws_server_port):
                     data = data.join('%%');
                 }
 
-                localSocket.send(`send#${data}`);
                 super.send(data);
             }
         };
-    """ % (ws_server_port, server_version)
+    """ % (servers_list, ws_server_port, server_version)
 
     open_browser(game_url, on_ready)
